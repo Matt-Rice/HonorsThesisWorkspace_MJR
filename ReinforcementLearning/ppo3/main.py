@@ -4,6 +4,7 @@ import argparse
 import matplotlib.pyplot as plt
 import os
 import imageio
+import time
 
 from actor_critic import ActorCritic
 from grid_env import GridEnvironment
@@ -63,7 +64,7 @@ def ppo_loss(model, old_logits, old_values, advantages, states, actions, returns
 def main(args):
 
     # Environment setup
-    env = GridEnvironment(sx=0,sy=0,gy=9,gx=9, grid_size=10)
+    env = GridEnvironment()
     state_size = env.observation_space.shape[0]
     action_size = env.action_space.n
 
@@ -94,61 +95,69 @@ def main(args):
         optimizer = tf.keras.optimizers.Adam(learning_rate=lr_actor)
         model.compile(optimizer=optimizer)
 
+    total_time= time.time()
+
     # Main training loop
-    for episode in range(max_episodes):
-        states, actions, rewards, values, returns = [], [], [], [], []
-        frames = []
-        state = env.reset()
-        for step in range(max_steps_per_episode):
-            state = tf.expand_dims(tf.convert_to_tensor(state), 0)
-            logits, value = model(state)
+    try:
+        for episode in range(max_episodes):
+            episode_time = time.time()
+            states, actions, rewards, values, returns = [], [], [], [], []
+            frames = []
+            state = env.reset()
+            for step in range(max_steps_per_episode):
+                state = tf.expand_dims(tf.convert_to_tensor(state), 0)
+                logits, value = model(state)
 
-            # Sample action from the policy distribution
-            action = tf.random.categorical(logits, 1)[0, 0].numpy()
-            next_state, reward, done, _ = env.step(action)
+                # Sample action from the policy distribution
+                action = tf.random.categorical(logits, 1)[0, 0].numpy()
+                next_state, reward, done, _ = env.step(action)
 
-            states.append(state)
-            actions.append(action)
-            rewards.append(reward)
-            values.append(value)
+                states.append(state)
+                actions.append(action)
+                rewards.append(reward)
+                values.append(value)
 
 
-            frame = env.render(mode='rgb_array')
-            frames.append(frame)
+                frame = env.render(mode='rgb_array')
+                frames.append(frame)
 
-            state = next_state
+                state = next_state
 
-            if done:
-                returns_batch = []
-                discounted_sum = 0
-                for r in rewards[::-1]:
-                    discounted_sum = r + gamma * discounted_sum
-                    returns_batch.append(discounted_sum)
-                returns_batch.reverse()
+                if done:
+                    returns_batch = []
+                    discounted_sum = 0
+                    for r in rewards[::-1]:
+                        discounted_sum = r + gamma * discounted_sum
+                        returns_batch.append(discounted_sum)
+                    returns_batch.reverse()
 
-                states = tf.concat(states, axis=0)
-                actions = np.array(actions, dtype=np.int32)
-                values = tf.concat(values, axis=0)
-                returns_batch = tf.convert_to_tensor(returns_batch)
-                old_logits, _ = model(states)
+                    states = tf.concat(states, axis=0)
+                    actions = np.array(actions, dtype=np.int32)
+                    values = tf.concat(values, axis=0)
+                    returns_batch = tf.convert_to_tensor(returns_batch)
+                    old_logits, _ = model(states)
 
-                # Calculate Loss
-                loss = ppo_loss(model, old_logits, values, returns_batch - np.array(values),
-                                states, actions, returns_batch, action_size, clip_ratio, optimizer, epochs)
+                    # Calculate Loss
+                    loss = ppo_loss(model, old_logits, values, returns_batch - np.array(values),
+                                    states, actions, returns_batch, action_size, clip_ratio, optimizer, epochs)
 
-                # Get total reward
-                total_reward = np.sum(rewards)
+                    # Get total reward
+                    total_reward = np.sum(rewards)
+                    end_time = time.time()
+                    print(f"Episode: {episode + 1}, Loss: {loss.numpy()}, Total Reward: {total_reward}"
+                          f"\nTime Elapsed: {end_time - episode_time}")
 
-                print(f"Episode: {episode + 1}, Loss: {loss.numpy()}, Total Reward: {total_reward}")
+                    # Save the model and GIF
+                    if episode % 10 == 0:
+                        model.save(os.path.join(f'{os.getcwd()}', 'ppo_model_checkpoints' ,f'ppo_model_episode_{episode + 1}.keras'))
+                        gif_path = os.path.join(f'{os.getcwd()}', 'ppo_model_gifs', f'episode_{episode + 1}.gif')
+                        imageio.mimsave(gif_path, frames, fps=10)
+                        print(f"Model and GIF saved for Episode {episode + 1}")
 
-                # Save the model and GIF
-                if episode % 10 == 0:
-                    model.save(os.path.join(f'{os.getcwd()}', 'ppo_model_checkpoints' ,f'ppo_model_episode_{episode + 1}.keras'))
-                    gif_path = os.path.join(f'{os.getcwd()}', 'ppo_model_gifs', f'episode_{episode + 1}.gif')
-                    imageio.mimsave(gif_path, frames, fps=10)
-                    print(f"Model and GIF saved for Episode {episode + 1}")
-
-                break
+                    break
+    except KeyboardInterrupt:
+        end_time = time.time()
+        print(f"Training interrupted.\nTime Elapsed : {end_time - total_time}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="PPO model training")
@@ -160,5 +169,6 @@ if __name__ == "__main__":
     parser.add_argument('--input_model', dest='input_model', type=str, default='', help='Path to existing model')
 
     args = parser.parse_args()
+
     main(args)
 
